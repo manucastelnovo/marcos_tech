@@ -94,6 +94,8 @@ administration screen yet, so use the script:
 npx tsx prisma/set-password.ts admin@marcostech.py
 ```
 
+Step by step in [CONTRASENAS.md](./CONTRASENAS.md), in Spanish.
+
 Deployment is documented in [DEPLOY.md](./DEPLOY.md), written in Spanish at the
 owner's request.
 

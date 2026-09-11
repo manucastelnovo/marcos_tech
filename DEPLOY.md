@@ -191,6 +191,9 @@ DATABASE_URL="<la cadena directa de Neon>" npx tsx prisma/set-password.ts tecnic
 El script pregunta dos veces y nunca toma la contraseña como argumento, así que
 no queda en el historial de la terminal. Exige al menos diez caracteres.
 
+El procedimiento completo, con los errores comunes, está en
+[CONTRASENAS.md](./CONTRASENAS.md).
+
 Agregar un cuarto empleado también requiere la base de datos hoy. Esa carencia
 está listada al final de este documento.
 
