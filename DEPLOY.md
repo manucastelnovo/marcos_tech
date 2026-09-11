@@ -105,7 +105,7 @@ En **Settings → Environment Variables**, agregar estas para Production:
 | --- | --- |
 | `DATABASE_URL` | La cadena directa de Neon del paso 2 |
 | `AUTH_SECRET` | Uno nuevo, generado abajo |
-| `NEXT_PUBLIC_APP_URL` | La URL de producción, ver la nota siguiente |
+| `APP_URL` | La URL de producción, ver la nota siguiente |
 | `BLOB_READ_WRITE_TOKEN` | Se agrega solo en el paso 5 |
 
 Generar un secreto de sesión nuevo. No reutilizar el del `.env` local: un
@@ -117,7 +117,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 ### La URL se conoce después del primer despliegue
 
-`NEXT_PUBLIC_APP_URL` se imprime dentro del código QR de cada comprobante, y el
+`APP_URL` se imprime dentro del código QR de cada comprobante, y el
 dominio no se conoce hasta que Vercel lo asigna. Entonces:
 
 1. Poner un valor provisorio como `https://marcostech.vercel.app`.

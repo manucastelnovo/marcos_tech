@@ -33,7 +33,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
   const repair = await getRepairDetail(id);
   if (!repair) notFound();
 
-  const trackingUrl = `${env.NEXT_PUBLIC_APP_URL}/seguimiento/${repair.publicToken}`;
+  const trackingUrl = `${env.APP_URL}/seguimiento/${repair.publicToken}`;
   const qrDataUrl = await QRCode.toDataURL(trackingUrl, { margin: 1, width: 240 });
 
   // A receipt is printed and handed over. If the public URL was never pointed at
@@ -56,8 +56,8 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
 
       {qrIsBroken ? (
         <div className="mx-auto max-w-3xl rounded-md border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900 print:hidden">
-          El QR apunta a <code>{env.NEXT_PUBLIC_APP_URL}</code>, que no es una dirección pública.
-          Configurá NEXT_PUBLIC_APP_URL con el dominio real antes de entregar comprobantes
+          El QR apunta a <code>{env.APP_URL}</code>, que no es una dirección pública.
+          Configurá APP_URL con el dominio real antes de entregar comprobantes
           impresos.
         </div>
       ) : null}
