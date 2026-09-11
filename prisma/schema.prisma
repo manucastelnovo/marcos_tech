@@ -1,0 +1,746 @@
+// MarcosTech repair shop — Phase 1 schema.
+// Single-tenant. Nothing is hard-deleted: every business table carries deletedAt.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// Prisma 7: the connection URL lives in prisma.config.ts for the CLI, and in
+// the driver adapter passed to the PrismaClient constructor at runtime.
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  ADMIN
+  SELLER
+  TECHNICIAN
+}
+
+/// Currencies the shop operates with. Phase 1 defaults to PYG; the column and
+/// the rate snapshot ship now so historical valuations survive Phase 3.
+enum Currency {
+  PYG
+  USD
+  ARS
+  BRL
+}
+
+enum RepairStatus {
+  RECEIVED
+  IN_DIAGNOSIS
+  QUOTE_SENT
+  AWAITING_APPROVAL
+  IN_REPAIR
+  AWAITING_PARTS
+  REPAIRED
+  READY_FOR_PICKUP
+  DELIVERED
+  CANCELLED
+}
+
+enum UrgencyLevel {
+  NORMAL
+  URGENT
+  VERY_URGENT
+}
+
+/// Intake checklist items. Values are stable identifiers; Spanish labels live
+/// in the UI layer.
+enum ChecklistKey {
+  POWERS_ON
+  CHARGES
+  SCREEN
+  TOUCH
+  CAMERAS
+  MICROPHONE
+  SPEAKER
+  BIOMETRICS
+  WIFI
+  BLUETOOTH
+  BATTERY
+  PHYSICAL_DAMAGE
+  MOISTURE
+  MISSING_PARTS
+}
+
+enum ChecklistState {
+  NOT_TESTED
+  WORKING
+  FAILING
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  STATUS_CHANGE
+  PRICE_CHANGE
+  SOFT_DELETE
+  PHOTO_ADDED
+  STOCK_MOVEMENT
+  PART_USED
+}
+
+/// Categories the shop actually stocks, taken from the client's own list.
+enum ProductCategory {
+  SCREEN
+  BATTERY
+  BOARD
+  CAMERA
+  CONNECTOR
+  FLEX
+  CHARGER
+  CABLE
+  CASE
+  GLASS
+  ACCESSORY
+  OTHER
+}
+
+enum StockMovementType {
+  PURCHASE
+  SALE
+  REPAIR_USE
+  RETURN
+  ADJUSTMENT
+}
+
+enum StockSerialStatus {
+  IN_STOCK
+  USED
+  RETURNED
+}
+
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  CARD
+  OTHER
+}
+
+enum CashMovementType {
+  SALE
+  REPAIR_PAYMENT
+  EXPENSE
+  WITHDRAWAL
+  REFUND
+  ADJUSTMENT
+}
+
+enum CashCountPhase {
+  OPENING
+  CLOSING
+}
+
+enum QuoteStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+// ---------------------------------------------------------------------------
+// Users
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  fullName     String
+  passwordHash String
+  role         UserRole
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  repairsAsTechnician Repair[]              @relation("RepairTechnician")
+  repairsReceived     Repair[]              @relation("RepairReceivedBy")
+  statusChanges       RepairStatusHistory[]
+  photosUploaded      RepairPhoto[]
+  auditLogs           AuditLog[]
+  stockMovements      StockMovement[]
+  partsAdded          RepairPart[]
+  cashSessionsOpened  CashSession[]         @relation("CashSessionOpenedBy")
+  cashSessionsClosed  CashSession[]         @relation("CashSessionClosedBy")
+  cashMovements       CashMovement[]
+  repairPayments      RepairPayment[]
+  exchangeRatesSet    ExchangeRate[]
+  sales               Sale[]
+  quotes              Quote[]
+
+  @@index([role])
+}
+
+// ---------------------------------------------------------------------------
+// Customers
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id        String    @id @default(cuid())
+  fullName  String
+  /// Digits only, no separators. This is the intake search key.
+  phone     String
+  whatsapp  String?
+  address   String?
+  notes     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  repairs Repair[]
+  sales   Sale[]
+  quotes  Quote[]
+
+  @@index([phone])
+  @@index([fullName])
+}
+
+// ---------------------------------------------------------------------------
+// Device catalog — autocomplete source only. A repair stores its own text
+// snapshot so renaming a catalog entry never rewrites historical orders.
+// ---------------------------------------------------------------------------
+
+model DeviceBrand {
+  id       String  @id @default(cuid())
+  name     String  @unique
+  isActive Boolean @default(true)
+
+  models DeviceModel[]
+}
+
+model DeviceModel {
+  id       String  @id @default(cuid())
+  brandId  String
+  name     String
+  isActive Boolean @default(true)
+
+  brand DeviceBrand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@unique([brandId, name])
+  @@index([name])
+}
+
+// ---------------------------------------------------------------------------
+// Repairs
+// ---------------------------------------------------------------------------
+
+model Repair {
+  id String @id @default(cuid())
+
+  /// Human-facing sequential identifier, e.g. OT-2026-00147.
+  orderNumber String @unique
+  /// Opaque token for the public tracking page. Never the order number:
+  /// sequential ids in a public URL let anyone enumerate other customers.
+  publicToken String @unique
+
+  receivedAt DateTime @default(now())
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  // Device — text snapshots, catalog-independent.
+  brandName String
+  modelName String
+  imei      String?
+
+  physicalCondition    String?
+  deliveredAccessories String?
+  reportedProblem      String
+  technicalDiagnosis   String?
+  workToPerform        String?
+  /// Free text in Phase 1. Becomes a relation to stock items in Phase 2.
+  partsNeeded          String?
+
+  // Money. Always Decimal, never Float. exchangeRate freezes the valuation
+  // used at write time so later rate updates cannot rewrite history.
+  currency     Currency @default(PYG)
+  exchangeRate Decimal? @db.Decimal(18, 6)
+  partsCost    Decimal? @db.Decimal(18, 4)
+  laborCost    Decimal? @db.Decimal(18, 4)
+  finalPrice   Decimal? @db.Decimal(18, 4)
+  // What the customer has paid is the sum of `payments`, not a column. A second
+  // payment is another row, and no single number can be typed over.
+
+  status  RepairStatus @default(RECEIVED)
+  urgency UrgencyLevel @default(NORMAL)
+
+  estimatedDeliveryAt DateTime?
+  deliveredAt         DateTime?
+  /// Warranty granted on delivery, in days. Drives the returning-device alert.
+  warrantyDays        Int?
+
+  technicianId String?
+  technician   User?   @relation("RepairTechnician", fields: [technicianId], references: [id])
+
+  receivedById String
+  receivedBy   User   @relation("RepairReceivedBy", fields: [receivedById], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  statusHistory RepairStatusHistory[]
+  checklist     RepairChecklistItem[]
+  photos        RepairPhoto[]
+  parts          RepairPart[]
+  stockMovements StockMovement[]
+  serialsUsed    StockSerial[]
+  payments       RepairPayment[]
+  cashMovements  CashMovement[]
+  originQuote    Quote?
+
+  @@index([status])
+  @@index([imei])
+  @@index([receivedAt])
+  @@index([customerId])
+  @@index([status, estimatedDeliveryAt])
+}
+
+model RepairStatusHistory {
+  id          String        @id @default(cuid())
+  repairId    String
+  repair      Repair        @relation(fields: [repairId], references: [id], onDelete: Cascade)
+  fromStatus  RepairStatus?
+  toStatus    RepairStatus
+  note        String?
+  changedById String
+  changedBy   User          @relation(fields: [changedById], references: [id])
+  changedAt   DateTime      @default(now())
+
+  @@index([repairId, changedAt])
+}
+
+model RepairChecklistItem {
+  id       String         @id @default(cuid())
+  repairId String
+  repair   Repair         @relation(fields: [repairId], references: [id], onDelete: Cascade)
+  key      ChecklistKey
+  state    ChecklistState @default(NOT_TESTED)
+  /// Free text for values that are not tri-state, e.g. battery health 85%.
+  note     String?
+
+  @@unique([repairId, key])
+}
+
+model RepairPhoto {
+  id           String   @id @default(cuid())
+  repairId     String
+  repair       Repair   @relation(fields: [repairId], references: [id], onDelete: Cascade)
+  url          String
+  /// Storage key, needed to delete the blob when a repair is purged.
+  pathname     String
+  caption      String?
+  uploadedById String
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id])
+  createdAt    DateTime @default(now())
+
+  @@index([repairId])
+}
+
+// ---------------------------------------------------------------------------
+// Inventory
+//
+// `Product.quantity` is a cache. The truth is the append-only StockMovement
+// ledger, and both are written in the same transaction. A reconciliation query
+// compares them, and the dashboard surfaces any product where they disagree.
+// ---------------------------------------------------------------------------
+
+model Product {
+  id       String          @id @default(cuid())
+  sku      String          @unique
+  name     String
+  category ProductCategory
+  /// Which devices this part fits, e.g. "iPhone 13 / 13 Pro". Free text on
+  /// purpose: compatibility lists are messy and never fit a schema.
+  compatibility String?
+
+  /// Cached running total. May go negative: the part was already used, and
+  /// refusing to record that makes the data worse, not better.
+  quantity Int @default(0)
+  minStock Int @default(0)
+
+  /// Weighted average, recomputed on every purchase. Consumption freezes the
+  /// value of its own moment, so a later purchase never rewrites an old repair.
+  averageCost Decimal  @default(0) @db.Decimal(18, 4)
+  salePrice   Decimal? @db.Decimal(18, 4)
+  /// The currency this product is costed and priced in. Screens are often
+  /// quoted in dollars even where everything else is in guaraníes.
+  currency    Currency @default(PYG)
+
+  location     String?
+  /// Only worth it for expensive parts: screens, boards, batteries.
+  tracksSerial Boolean @default(false)
+  isActive     Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  movements   StockMovement[]
+  serials     StockSerial[]
+  repairParts RepairPart[]
+  saleLines   SaleLine[]
+
+  @@index([category])
+  @@index([name])
+  @@index([isActive, quantity])
+}
+
+model StockMovement {
+  id        String            @id @default(cuid())
+  productId String
+  product   Product           @relation(fields: [productId], references: [id])
+  type      StockMovementType
+  /// Signed: positive adds to stock, negative removes it. The sum of these is
+  /// the authoritative quantity.
+  quantity  Int
+  /// Unit cost at the moment of the movement. Frozen forever.
+  unitCost  Decimal           @db.Decimal(18, 4)
+  currency  Currency
+  reason    String?
+
+  repairId String?
+  repair   Repair? @relation(fields: [repairId], references: [id])
+
+  saleId String?
+
+  actorId String
+  actor   User   @relation(fields: [actorId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([productId, createdAt])
+  @@index([createdAt])
+  @@index([repairId])
+}
+
+model StockSerial {
+  id           String            @id @default(cuid())
+  productId    String
+  product      Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  serial       String
+  status       StockSerialStatus @default(IN_STOCK)
+  purchaseCost Decimal           @db.Decimal(18, 4)
+  currency     Currency
+
+  repairId String?
+  repair   Repair? @relation(fields: [repairId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  repairParts RepairPart[]
+
+  @@unique([productId, serial])
+  @@index([serial])
+  @@index([status])
+}
+
+/// A part actually consumed by a repair. Carries its own snapshot so renaming
+/// or deactivating a product never rewrites what a past job cost.
+model RepairPart {
+  id       String  @id @default(cuid())
+  repairId String
+  repair   Repair  @relation(fields: [repairId], references: [id], onDelete: Cascade)
+
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+
+  description String
+  quantity    Int
+  unitCost    Decimal  @db.Decimal(18, 4)
+  currency    Currency
+
+  serialId String?
+  serial   StockSerial? @relation(fields: [serialId], references: [id])
+
+  addedById String
+  addedBy   User   @relation(fields: [addedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([repairId])
+  @@index([productId])
+}
+
+// ---------------------------------------------------------------------------
+// Cash register
+//
+// The drawer holds several currencies and each is counted on its own at close.
+// Only CASH movements affect what should physically be in it; transfers and
+// cards are recorded for revenue and deliberately excluded from reconciliation.
+// ---------------------------------------------------------------------------
+
+model CashSession {
+  id String @id @default(cuid())
+
+  openedAt   DateTime @default(now())
+  openedById String
+  openedBy   User     @relation("CashSessionOpenedBy", fields: [openedById], references: [id])
+
+  closedAt   DateTime?
+  closedById String?
+  closedBy   User?     @relation("CashSessionClosedBy", fields: [closedById], references: [id])
+
+  notes String?
+
+  /// At most one session may be open at a time. Set to true while open and to
+  /// null once closed: PostgreSQL treats NULLs as distinct in a unique index,
+  /// so many closed sessions coexist and only one can hold the `true`.
+  openMarker Boolean? @unique
+
+  counts    CashCount[]
+  movements CashMovement[]
+  payments  RepairPayment[]
+  sales     Sale[]
+
+  @@index([openedAt])
+}
+
+/// What was physically counted, per currency, at open and at close.
+model CashCount {
+  id        String         @id @default(cuid())
+  sessionId String
+  session   CashSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  currency  Currency
+  phase     CashCountPhase
+  amount    Decimal        @db.Decimal(18, 4)
+
+  @@unique([sessionId, currency, phase])
+}
+
+model CashMovement {
+  id        String           @id @default(cuid())
+  sessionId String
+  session   CashSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type      CashMovementType
+  /// Signed: positive puts money in, negative takes it out. The expected amount
+  /// is the opening count plus the sum of these, per currency.
+  amount    Decimal          @db.Decimal(18, 4)
+  currency  Currency
+  /// Rate against guaraníes at the moment of the movement, frozen for reporting.
+  exchangeRate Decimal?      @db.Decimal(18, 6)
+  method    PaymentMethod
+  description String?
+
+  repairId String?
+  repair   Repair? @relation(fields: [repairId], references: [id])
+
+  saleId String?
+
+  actorId String
+  actor   User   @relation(fields: [actorId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, currency])
+  @@index([createdAt])
+  @@index([repairId])
+}
+
+/// Money received against a repair. Replaces the old `deposit` column: the
+/// amount paid is the sum of these, so a second payment is just another row.
+model RepairPayment {
+  id       String @id @default(cuid())
+  repairId String
+  repair   Repair @relation(fields: [repairId], references: [id], onDelete: Cascade)
+
+  amount       Decimal       @db.Decimal(18, 4)
+  currency     Currency
+  exchangeRate Decimal?      @db.Decimal(18, 6)
+  method       PaymentMethod
+
+  /// Null when the money was taken with no register open. Recorded anyway, and
+  /// reported, rather than refused.
+  sessionId String?
+  session   CashSession? @relation(fields: [sessionId], references: [id])
+
+  actorId String
+  actor   User   @relation(fields: [actorId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([repairId])
+  @@index([sessionId])
+  @@index([createdAt])
+}
+
+/// Append-only rate history. The current rate is the latest row per currency;
+/// nothing is ever updated, so a past valuation stays readable.
+model ExchangeRate {
+  id            String   @id @default(cuid())
+  currency      Currency
+  /// How many guaraníes one unit of this currency is worth.
+  rate          Decimal  @db.Decimal(18, 6)
+  effectiveFrom DateTime @default(now())
+
+  setById String
+  setBy   User   @relation(fields: [setById], references: [id])
+
+  @@index([currency, effectiveFrom])
+}
+
+// ---------------------------------------------------------------------------
+// Sales
+// ---------------------------------------------------------------------------
+
+model Sale {
+  id     String @id @default(cuid())
+  /// Human-facing sequential identifier, e.g. "VT-2026-00001".
+  number String @unique
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  sellerId String
+  seller   User   @relation(fields: [sellerId], references: [id])
+
+  /// A sale is settled in one currency. Products priced in another are
+  /// converted once, at the rate frozen below.
+  currency     Currency
+  exchangeRate Decimal? @db.Decimal(18, 6)
+
+  subtotal Decimal       @db.Decimal(18, 4)
+  discount Decimal       @default(0) @db.Decimal(18, 4)
+  total    Decimal       @db.Decimal(18, 4)
+  method   PaymentMethod
+
+  sessionId String?
+  session   CashSession? @relation(fields: [sessionId], references: [id])
+
+  notes String?
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  lines SaleLine[]
+
+  @@index([createdAt])
+  @@index([customerId])
+  @@index([sessionId])
+}
+
+model SaleLine {
+  id     String @id @default(cuid())
+  saleId String
+  sale   Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+
+  /// Snapshot, so renaming a product never rewrites a past ticket.
+  description String
+  quantity    Int
+  unitPrice   Decimal @db.Decimal(18, 4)
+  /// Cost at the moment of sale, frozen, in the sale's currency. This is what
+  /// makes the margin real rather than a guess.
+  unitCost    Decimal @db.Decimal(18, 4)
+  lineTotal   Decimal @db.Decimal(18, 4)
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+// ---------------------------------------------------------------------------
+// Quotes
+//
+// Its own entity rather than a repair status, because the case that justifies
+// it is a customer asking a price without leaving the device. The QUOTE_SENT
+// and AWAITING_APPROVAL statuses on a repair stay for devices already here.
+// ---------------------------------------------------------------------------
+
+model Quote {
+  id     String @id @default(cuid())
+  /// Human-facing identifier, e.g. "PR-2026-00001".
+  number String @unique
+
+  /// A walk-in may not be a customer yet, so the contact is free text until
+  /// the quote is accepted and a real customer is created.
+  customerId    String?
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  customerName  String?
+  customerPhone String?
+
+  brandName   String
+  modelName   String
+  /// What is wrong and what would be done about it.
+  description String
+
+  currency     Currency @default(PYG)
+  exchangeRate Decimal? @db.Decimal(18, 6)
+  partsCost    Decimal? @db.Decimal(18, 4)
+  laborCost    Decimal? @db.Decimal(18, 4)
+  total        Decimal  @db.Decimal(18, 4)
+
+  status     QuoteStatus @default(PENDING)
+  validUntil DateTime?
+  notes      String?
+
+  /// Set once the customer accepts and the work order is created.
+  convertedRepairId String? @unique
+  convertedRepair   Repair? @relation(fields: [convertedRepairId], references: [id])
+
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------
+// Sequential numbering — one row per series per year, incremented atomically
+// inside the same transaction that inserts the record it names.
+// ---------------------------------------------------------------------------
+
+model Counter {
+  /// Which series: "repair" or "sale".
+  key   String
+  year  Int
+  value Int    @default(0)
+
+  @@id([key, year])
+}
+
+// ---------------------------------------------------------------------------
+// Audit — append-only. Written in the same transaction as the change it
+// describes, so a change can never exist without its audit row.
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  actorId    String?
+  actor      User?       @relation(fields: [actorId], references: [id])
+  action     AuditAction
+  entityType String
+  entityId   String
+  /// Short human-readable sentence, rendered directly in the audit viewer.
+  summary    String
+  /// Field-level before/after diff. Null for creates.
+  changes    Json?
+  createdAt  DateTime    @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp message templates — editable by the admin, rendered into wa.me links.
+// ---------------------------------------------------------------------------
+
+model WhatsAppTemplate {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  label     String
+  body      String
+  updatedAt DateTime @updatedAt
+}

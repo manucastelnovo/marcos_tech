@@ -33,9 +33,19 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+
 # vercel
 .vercel
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# keep the documented template committed
+!.env.example
+
+# prisma generated client
+/src/generated
+
+# local blob storage fallback (development only)
+/.local-blob
