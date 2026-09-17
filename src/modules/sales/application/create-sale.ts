@@ -116,6 +116,7 @@ export async function createSale(
         method: input.method,
         sessionId: session?.id ?? null,
         notes: input.notes?.trim() || null,
+        invoiceNumber: input.invoiceNumber ?? null,
         lines: {
           create: resolved.map((line) => ({
             productId: line.product.id,
@@ -172,7 +173,9 @@ export async function createSale(
       action: "CREATE",
       entityType: "Sale",
       entityId: sale.id,
-      summary: `Registró la venta ${sale.number} por ${Money.of(totals.total, currency).format()}`,
+      summary: `Registró la venta ${sale.number} por ${Money.of(totals.total, currency).format()}${
+        input.invoiceNumber ? ` (factura ${input.invoiceNumber})` : ""
+      }`,
     });
 
     return {

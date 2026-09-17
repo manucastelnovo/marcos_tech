@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/shared/infrastructure/auth/session";
 import {
   safeLocalPath,
   usingLocalPhotoStorage,
-} from "@/modules/repairs/infrastructure/photo-storage";
+} from "@/shared/infrastructure/photo-storage";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".jpg": "image/jpeg",

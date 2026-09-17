@@ -1,22 +1,20 @@
 import { requirePageUser } from "@/shared/infrastructure/auth/session";
-import { permissionsFor } from "@/modules/users/domain/permissions";
-import { AppNav } from "@/shared/ui/app-nav";
+import { can, permissionsFor } from "@/modules/users/domain/permissions";
+import { getCashStatus } from "@/modules/cash/application/queries";
+import { AppShell } from "@/shared/ui/app-shell";
 
-/**
- * Every authenticated screen sits under this layout, so there is exactly one
- * place that decides whether a visitor gets in. Server Actions guard themselves
- * as well: this handles navigation, not authorisation.
- */
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const user = await requirePageUser();
+  // Only people who can see the register are told whether it is open.
+  const cash = can(user.role, "cash.view") ? await getCashStatus() : null;
 
   return (
-    <>
-      <AppNav
-        user={{ name: user.name, role: user.role }}
-        permissions={permissionsFor(user.role)}
-      />
-      <main className="mx-auto w-full max-w-7xl flex-1 p-4 md:p-6">{children}</main>
-    </>
+    <AppShell
+      user={{ name: user.name, role: user.role }}
+      permissions={permissionsFor(user.role)}
+      cash={cash ? { isOpen: cash.isOpen } : null}
+    >
+      {children}
+    </AppShell>
   );
 }

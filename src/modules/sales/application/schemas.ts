@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CURRENCIES, parseAmountInput } from "@/shared/domain/money";
 import { PAYMENT_METHODS } from "@/modules/cash/domain/cash-movement";
+import { normalizeInvoiceNumber } from "../domain/sale";
 
 const amountText = z.string().trim().max(30).optional().or(z.literal(""));
 
@@ -18,6 +19,25 @@ export const createSaleSchema = z
     method: z.enum(PAYMENT_METHODS).default("CASH"),
     discount: amountText,
     notes: z.string().trim().max(300).optional().or(z.literal("")),
+    /// Preprinted invoice handed over with the sale. Optional: most counter
+    /// sales go out with the internal ticket only.
+    invoiceNumber: z
+      .string()
+      .trim()
+      .max(30)
+      .transform((value, ctx) => {
+        if (!value) return null;
+        const normalized = normalizeInvoiceNumber(value);
+        if (!normalized) {
+          ctx.addIssue({
+            code: "custom",
+            message: "Número de factura inválido. Formato: 001-002-0000004",
+          });
+          return z.NEVER;
+        }
+        return normalized;
+      })
+      .optional(),
     lines: z.array(saleLineSchema).min(1, "Agregá al menos un producto").max(100),
   })
   .superRefine((data, ctx) => {

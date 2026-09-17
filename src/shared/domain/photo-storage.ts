@@ -6,18 +6,22 @@ export type StoredPhoto = {
 };
 
 export type PhotoUpload = {
-  repairId: string;
+  /** Where the file is grouped, e.g. "repairs/<id>" or "products/<id>". */
+  folder: string;
   fileName: string;
   contentType: string;
   data: Buffer;
 };
 
 /**
- * Where intake photos live.
+ * Where uploaded pictures live: repair intake evidence and product images.
  *
  * The domain only knows this interface. Vercel Blob in production and the local
  * disk in development are both adapters, so swapping to R2 or S3 later touches
  * one file.
+ *
+ * It lives in shared because two modules store pictures and neither owns the
+ * storage.
  */
 export interface PhotoStorage {
   save(upload: PhotoUpload): Promise<StoredPhoto>;

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { computeTotals, convertAmount, formatSaleNumber, parseSaleNumber } from "./sale";
+import {
+  computeTotals,
+  convertAmount,
+  discountFromPercent,
+  formatSaleNumber,
+  normalizeInvoiceNumber,
+  parseSaleNumber,
+} from "./sale";
 
 describe("sale numbering", () => {
   it("uses its own prefix on the same counter machinery as repairs", () => {
@@ -86,5 +93,46 @@ describe("convertAmount", () => {
     // Rounding to whole guaraníes midway would drift the result.
     const there = convertAmount("1", "USD", "PYG", rates);
     expect(convertAmount(there as string, "PYG", "USD", rates)).toBe("1.00");
+  });
+});
+
+describe("discountFromPercent", () => {
+  it("rounds guaraníes to whole units, half up", () => {
+    // 10% of 45.005 is 4.500,5.
+    expect(discountFromPercent("45005", "10", "PYG")).toBe("4501");
+  });
+
+  it("keeps cents for dollars", () => {
+    expect(discountFromPercent("99.99", "15", "USD")).toBe("15.00");
+    expect(discountFromPercent("10.00", "12,5", "USD")).toBe("1.25");
+  });
+
+  it("accepts the whole range and nothing outside it", () => {
+    expect(discountFromPercent("1000", "0", "PYG")).toBe("0");
+    expect(discountFromPercent("1000", "100", "PYG")).toBe("1000");
+    expect(discountFromPercent("1000", "100.5", "PYG")).toBeNull();
+    expect(discountFromPercent("1000", "-5", "PYG")).toBeNull();
+    expect(discountFromPercent("1000", "diez", "PYG")).toBeNull();
+    expect(discountFromPercent("1000", "", "PYG")).toBeNull();
+  });
+});
+
+describe("normalizeInvoiceNumber", () => {
+  it("keeps the canonical form", () => {
+    expect(normalizeInvoiceNumber("001-002-0000004")).toBe("001-002-0000004");
+  });
+
+  it("pads the short form and splits the bare digits", () => {
+    expect(normalizeInvoiceNumber(" 1-2-4 ")).toBe("001-002-0000004");
+    expect(normalizeInvoiceNumber("0010020000004")).toBe("001-002-0000004");
+  });
+
+  it("refuses anything it would have to guess", () => {
+    expect(normalizeInvoiceNumber("001-002")).toBeNull();
+    expect(normalizeInvoiceNumber("001-002-00000004")).toBeNull();
+    expect(normalizeInvoiceNumber("A01-002-0000004")).toBeNull();
+    expect(normalizeInvoiceNumber("001-002-0000000")).toBeNull();
+    expect(normalizeInvoiceNumber("0010020000000")).toBeNull();
+    expect(normalizeInvoiceNumber("12345")).toBeNull();
   });
 });

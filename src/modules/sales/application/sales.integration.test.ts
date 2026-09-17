@@ -12,7 +12,8 @@ import { intakeSchema } from "@/modules/repairs/application/schemas";
 import { parseOrderNumber } from "@/modules/repairs/domain/order-number";
 import { parseSaleNumber } from "../domain/sale";
 import { createSale } from "./create-sale";
-import { getSaleDetail, getSalesSummary } from "./queries";
+import { createSaleSchema } from "./schemas";
+import { getSaleDetail, getSalesSummary, listSales } from "./queries";
 
 const admin: CurrentUser = {
   id: "sale-admin",
@@ -453,5 +454,50 @@ describe("sales summary", () => {
     expect(summary.todayCount).toBe(2);
     expect(summary.today.PYG).toBe("45000");
     expect(summary.today.USD).toBe("100");
+  });
+});
+
+describe("invoice number", () => {
+  function saleInput(productId: string, invoiceNumber: string) {
+    return {
+      customerId: "",
+      currency: "PYG",
+      method: "CASH",
+      discount: "",
+      notes: "",
+      invoiceNumber,
+      lines: [{ productId, quantity: 1, unitPrice: "" }],
+    };
+  }
+
+  it("stores the preprinted invoice in canonical form and finds the sale by it", async () => {
+    const product = await stockedProduct();
+
+    const sale = await createSale(
+      createSaleSchema.parse(saleInput(product.id, "1-2-4")),
+      seller,
+    );
+
+    const detail = await getSaleDetail(sale.saleId);
+    expect(detail?.invoiceNumber).toBe("001-002-0000004");
+
+    const found = await listSales("0000004");
+    expect(found.map((entry) => entry.id)).toEqual([sale.saleId]);
+    expect(found[0].invoiceNumber).toBe("001-002-0000004");
+  });
+
+  it("stays optional", async () => {
+    const product = await stockedProduct();
+
+    const sale = await createSale(createSaleSchema.parse(saleInput(product.id, "")), seller);
+
+    expect((await getSaleDetail(sale.saleId))?.invoiceNumber).toBeNull();
+  });
+
+  it("rejects a number it cannot read before anything is written", () => {
+    const parsed = createSaleSchema.safeParse(saleInput("any", "001-002"));
+
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0].path).toEqual(["invoiceNumber"]);
   });
 });

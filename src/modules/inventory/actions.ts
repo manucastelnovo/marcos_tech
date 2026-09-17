@@ -14,6 +14,9 @@ import {
   updateProductSchema,
 } from "./application/schemas";
 import { searchProducts, type ProductSuggestion } from "./application/queries";
+import { removeProductImage, setProductImage } from "./application/product-image";
+import { BusinessRuleError } from "@/shared/domain/errors";
+import { z } from "zod";
 
 export async function createProductAction(input: unknown): Promise<ActionResult<{ id: string }>> {
   return runAction(async () => {
@@ -83,5 +86,33 @@ export async function searchProductsAction(
   return runAction(async () => {
     await requirePermission("stock.view");
     return searchProducts(query);
+  });
+}
+
+/** Product picture upload. FormData, because a File is not a plain argument. */
+export async function uploadProductImageAction(
+  formData: FormData,
+): Promise<ActionResult<{ url: string }>> {
+  return runAction(async () => {
+    const actor = await requirePermission("stock.manage");
+
+    const productId = String(formData.get("productId") ?? "");
+    const file = formData.get("file");
+    if (!productId) throw new BusinessRuleError("Falta el producto");
+    if (!(file instanceof File)) throw new BusinessRuleError("No se recibió ninguna imagen");
+
+    const result = await setProductImage({ productId, file }, actor);
+    revalidatePath(`/stock/${productId}`);
+    revalidatePath("/ventas/nueva");
+    return result;
+  });
+}
+
+export async function removeProductImageAction(productId: string): Promise<ActionResult> {
+  return runAction(async () => {
+    const actor = await requirePermission("stock.manage");
+    await removeProductImage(z.string().min(1).parse(productId), actor);
+    revalidatePath(`/stock/${productId}`);
+    revalidatePath("/ventas/nueva");
   });
 }

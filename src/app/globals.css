@@ -7,9 +7,16 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  /* The font loader sets --font-inter on <html>. Pointing --font-sans at
+     itself, as the scaffold did, is a cycle: the browser drops it and falls
+     back to its default serif. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-heading: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -48,39 +55,51 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+ * MarcosTech palette, from the client's redesign spec.
+ *
+ * Blue is reserved for primary actions, links and selected states. Everything
+ * else stays on neutral surfaces so the one thing that is blue is the thing to
+ * press.
+ */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --background: #f6f8fc;
+  --foreground: #172033;
+  --card: #ffffff;
+  --card-foreground: #172033;
+  --popover: #ffffff;
+  --popover-foreground: #172033;
+  --primary: #1769d2;
+  --primary-foreground: #ffffff;
+  --secondary: #eef2f8;
+  --secondary-foreground: #172033;
+  --muted: #f1f4f9;
+  --muted-foreground: #64748b;
+  --accent: #eaf1fc;
+  --accent-foreground: #0b1f3a;
+  --destructive: #dc2626;
+  --success: #16804b;
+  --success-foreground: #ffffff;
+  --warning: #d97706;
+  --warning-foreground: #ffffff;
+  --border: #e3e8f0;
+  --input: #e3e8f0;
+  --ring: #1769d2;
+  --chart-1: #1769d2;
+  --chart-2: #16804b;
+  --chart-3: #d97706;
+  --chart-4: #7c3aed;
+  --chart-5: #0b1f3a;
+  /* 10px: buttons land on the spec's 8–10px, cards (xl) on 12–14px. */
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: #0b1f3a;
+  --sidebar-foreground: #c3cfe2;
+  --sidebar-primary: #1769d2;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #132b4f;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #1a3460;
+  --sidebar-ring: #1769d2;
 }
 
 .dark {
@@ -122,9 +141,18 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground text-[15px] leading-normal antialiased;
   }
   html {
     @apply font-sans;
+  }
+  /* Keyboard focus stays visible everywhere: the counter works fast and a lost
+     focus ring means typing into the wrong field. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
+  /* Numbers line up in columns of money and quantities. */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
   }
 }

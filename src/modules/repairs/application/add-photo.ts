@@ -4,11 +4,11 @@ import { writeAudit } from "@/shared/infrastructure/audit";
 import type { CurrentUser } from "@/shared/infrastructure/auth/session";
 import { assertCan } from "@/modules/users/domain/permissions";
 import { BusinessRuleError } from "@/shared/domain/errors";
-import { photoStorage } from "../infrastructure/photo-storage";
+import { photoStorage } from "@/shared/infrastructure/photo-storage";
 import {
   MAX_PHOTO_BYTES,
   isAllowedPhotoType,
-} from "../domain/ports/photo-storage";
+} from "@/shared/domain/photo-storage";
 import { assertRepairScope } from "./repair-access";
 
 export type AddPhotoResult = { id: string; url: string };
@@ -44,7 +44,7 @@ export async function addRepairPhoto(
   if (!repair) throw new BusinessRuleError("La reparación no existe");
 
   const stored = await photoStorage.save({
-    repairId: repair.id,
+    folder: `repairs/${repair.id}`,
     fileName: input.file.name,
     contentType: input.file.type,
     data: Buffer.from(await input.file.arrayBuffer()),

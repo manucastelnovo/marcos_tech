@@ -7,6 +7,7 @@ import type { PaymentMethod } from "@/modules/cash/domain/cash-movement";
 export type SaleListItem = {
   id: string;
   number: string;
+  invoiceNumber: string | null;
   createdAt: Date;
   customerName: string | null;
   sellerName: string;
@@ -26,6 +27,7 @@ export async function listSales(search?: string, take = 60): Promise<SaleListIte
         ? {
             OR: [
               { number: { contains: trimmed, mode: "insensitive" as const } },
+              { invoiceNumber: { contains: trimmed } },
               { customer: { fullName: { contains: trimmed, mode: "insensitive" as const } } },
               {
                 lines: {
@@ -41,6 +43,7 @@ export async function listSales(search?: string, take = 60): Promise<SaleListIte
     select: {
       id: true,
       number: true,
+      invoiceNumber: true,
       createdAt: true,
       currency: true,
       total: true,
@@ -54,6 +57,7 @@ export async function listSales(search?: string, take = 60): Promise<SaleListIte
   return rows.map((row) => ({
     id: row.id,
     number: row.number,
+    invoiceNumber: row.invoiceNumber,
     createdAt: row.createdAt,
     customerName: row.customer?.fullName ?? null,
     sellerName: row.seller.fullName,
@@ -67,6 +71,7 @@ export async function listSales(search?: string, take = 60): Promise<SaleListIte
 export type SaleDetail = {
   id: string;
   number: string;
+  invoiceNumber: string | null;
   createdAt: Date;
   customer: { id: string; fullName: string; phone: string } | null;
   sellerName: string;
@@ -96,6 +101,7 @@ export async function getSaleDetail(id: string): Promise<SaleDetail | null> {
     select: {
       id: true,
       number: true,
+      invoiceNumber: true,
       createdAt: true,
       currency: true,
       exchangeRate: true,
@@ -131,6 +137,7 @@ export async function getSaleDetail(id: string): Promise<SaleDetail | null> {
   return {
     id: row.id,
     number: row.number,
+    invoiceNumber: row.invoiceNumber,
     createdAt: row.createdAt,
     customer: row.customer,
     sellerName: row.seller.fullName,

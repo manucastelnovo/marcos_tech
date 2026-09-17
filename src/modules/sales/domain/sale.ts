@@ -120,3 +120,47 @@ export function convertAmount(
 
   return Money.of(inGuaranies.dividedBy(divisor), to).toDecimalString();
 }
+
+/**
+ * Turns a percentage typed at the counter into the amount the backend stores.
+ *
+ * The sale keeps storing an amount, as it always has: "10%" is a way of typing
+ * a discount, not a different kind of discount. The result is rounded once, at
+ * the currency scale, so 10% of Gs. 45.005 is Gs. 4.501 and never a fraction.
+ *
+ * Returns null for anything that is not a percentage between 0 and 100.
+ */
+export function discountFromPercent(
+  subtotal: string,
+  percentInput: string,
+  currency: Currency,
+): string | null {
+  const normalized = percentInput.trim().replace(",", ".");
+  if (!/^\d+(\.\d+)?$/.test(normalized)) return null;
+
+  const percent = new Decimal(normalized);
+  if (percent.greaterThan(100)) return null;
+
+  return Money.of(subtotal, currency).times(percent.dividedBy(100)).toDecimalString();
+}
+
+/**
+ * Canonical form of a preprinted invoice number: establishment, point of
+ * issue and sequence, "001-002-0000004".
+ *
+ * The counter types it in whatever way is fastest, so "1-2-4" and the thirteen
+ * bare digits are both accepted and padded. Anything else returns null rather
+ * than a guess, because a wrong number points to someone else's invoice.
+ */
+export function normalizeInvoiceNumber(raw: string): string | null {
+  const trimmed = raw.trim();
+
+  const parts =
+    /^(\d{3})(\d{3})(\d{7})$/.exec(trimmed) ?? /^(\d{1,3})-(\d{1,3})-(\d{1,7})$/.exec(trimmed);
+  if (!parts) return null;
+
+  const [, establishment, point, sequence] = parts;
+  if (Number(sequence) === 0) return null;
+
+  return `${establishment.padStart(3, "0")}-${point.padStart(3, "0")}-${sequence.padStart(7, "0")}`;
+}

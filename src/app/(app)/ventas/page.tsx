@@ -51,7 +51,7 @@ export default async function SalesPage({
           <Input
             name="q"
             defaultValue={q ?? ""}
-            placeholder="Número de venta, cliente o producto"
+            placeholder="Número de venta o factura, cliente o producto"
             className="pl-9"
           />
         </div>
@@ -73,6 +73,11 @@ export default async function SalesPage({
               <Card className="transition-shadow hover:shadow-md">
                 <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-1 p-4">
                   <span className="font-mono text-sm font-semibold">{sale.number}</span>
+                  {sale.invoiceNumber ? (
+                    <span className="text-muted-foreground font-mono text-xs">
+                      Fact. {sale.invoiceNumber}
+                    </span>
+                  ) : null}
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm">
                       {sale.customerName ?? "Sin cliente"}

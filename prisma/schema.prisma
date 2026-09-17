@@ -373,6 +373,11 @@ model Product {
   currency    Currency @default(PYG)
 
   location     String?
+  /// Picture shown on the point of sale. Optional: most parts are recognised
+  /// by name, and a category icon stands in when there is none.
+  imageUrl      String?
+  /// Storage key of the picture, kept so replacing it removes the old file.
+  imagePathname String?
   /// Only worth it for expensive parts: screens, boards, batteries.
   tracksSerial Boolean @default(false)
   isActive     Boolean @default(true)
@@ -615,12 +620,19 @@ model Sale {
 
   notes String?
 
+  /// Number of the preprinted invoice handed over with this sale, e.g.
+  /// "001-002-0000004". The system does not issue invoices; it records which
+  /// paper one goes with the ticket so both can be found from either side.
+  /// Not unique: a voided sheet is re-used as a reference by the shop.
+  invoiceNumber String?
+
   createdAt DateTime  @default(now())
   deletedAt DateTime?
 
   lines SaleLine[]
 
   @@index([createdAt])
+  @@index([invoiceNumber])
   @@index([customerId])
   @@index([sessionId])
 }

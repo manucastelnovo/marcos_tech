@@ -247,3 +247,28 @@ function toRecord(
     counts.map((count) => [count.currency, count.amount.toString()]),
   ) as Partial<Record<Currency, string>>;
 }
+
+export type CashStatus = {
+  isOpen: boolean;
+  openedAt: Date | null;
+  openedByName: string | null;
+};
+
+/**
+ * Whether a register is open, and nothing else.
+ *
+ * The header shows this on every screen, so it must stay a single indexed
+ * lookup. `getOpenCashSession` loads every movement and is for the cash page.
+ */
+export async function getCashStatus(): Promise<CashStatus> {
+  const open = await prisma.cashSession.findFirst({
+    where: { closedAt: null },
+    select: { openedAt: true, openedBy: { select: { fullName: true } } },
+  });
+
+  return {
+    isOpen: open !== null,
+    openedAt: open?.openedAt ?? null,
+    openedByName: open?.openedBy.fullName ?? null,
+  };
+}

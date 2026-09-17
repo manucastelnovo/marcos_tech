@@ -41,6 +41,9 @@ export default async function SaleDetailPage({
             Servicio técnico de celulares y tablets
           </p>
           <p className="mt-2 font-mono text-base font-semibold">{sale.number}</p>
+          {sale.invoiceNumber ? (
+            <p className="font-mono text-xs">Factura Nº {sale.invoiceNumber}</p>
+          ) : null}
           <p className="text-muted-foreground text-xs">{formatDateTime(sale.createdAt)}</p>
         </header>
 

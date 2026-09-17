@@ -9,7 +9,7 @@ import {
   type PhotoStorage,
   type PhotoUpload,
   type StoredPhoto,
-} from "../domain/ports/photo-storage";
+} from "@/shared/domain/photo-storage";
 
 const LOCAL_ROOT = path.join(process.cwd(), ".local-blob");
 
@@ -61,7 +61,7 @@ class LocalDiskPhotoStorage implements PhotoStorage {
 }
 
 function buildKey(upload: PhotoUpload): string {
-  return `repairs/${upload.repairId}/${randomUUID()}.${extensionFor(upload.contentType)}`;
+  return `${upload.folder}/${randomUUID()}.${extensionFor(upload.contentType)}`;
 }
 
 /**

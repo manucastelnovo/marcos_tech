@@ -1,506 +1,421 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Money, type Currency } from "@/shared/domain/money";
+import type { PaymentMethod } from "@/modules/cash/domain/cash-movement";
+import type { ProductCategory } from "@/modules/inventory/domain/product";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { cn } from "@/lib/utils";
-import { CURRENCIES, CURRENCY_LABEL, type Currency } from "@/shared/domain/money";
-import { formatMoney } from "@/shared/ui/money-text";
-import { searchProductsAction } from "@/modules/inventory/actions";
-import type { ProductSuggestion } from "@/modules/inventory/application/queries";
-import { searchCustomersAction } from "@/modules/customers/actions";
-import type { CustomerSuggestion } from "@/modules/customers/application/queries";
-import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL, type PaymentMethod } from "@/modules/cash/domain/cash-movement";
-import { computeTotals } from "../domain/sale";
-import { createSaleAction } from "../actions";
+  addToCart,
+  previewCart,
+  repriceLines,
+  resolveDiscount,
+  toSalePayload,
+  type CartLine,
+  type DiscountMode,
+  type Rates,
+} from "../domain/cart";
+import { normalizeInvoiceNumber } from "../domain/sale";
+import type { SellableProduct } from "../application/catalog";
+import { createSaleAction, searchCatalogAction } from "../actions";
+import { CategoryChips, ProductSearch } from "./pos/product-search";
+import { ProductGrid, type GridState } from "./pos/product-grid";
+import { Cart } from "./pos/cart";
+import { CustomerPicker, type PickedCustomer } from "./pos/customer-picker";
+import { CashStatusBlock, type PosCashStatus } from "./pos/cash-status";
+import { CashReceived, PaymentMethods } from "./pos/payment-methods";
+import { SaleOptions, SaleTotalsPanel } from "./pos/sale-summary";
 
-type Line = {
-  productId: string;
-  label: string;
-  quantity: number;
-  unitPrice: string;
-  unitCost: string;
-  available: number;
-  productCurrency: Currency;
-};
+const MIN_QUERY = 2;
 
 /**
- * The counter's selling screen, built for speed like the intake screen.
+ * The counter's selling screen.
  *
- * Search, add, done. The totals recompute as you type, the margin is visible
- * before the sale is closed, and Ctrl+Enter finishes it without reaching for
- * the mouse.
+ * Search on the left, ticket on the right. Business rules stay where they
+ * were: the server validates, prices, converts and records; this component
+ * only previews what the server will do and sends the same payload as before.
+ *
+ * Keyboard: Ctrl+K search, F2 customer, Enter adds an exact code (barcode
+ * scanners type the code and press Enter), Ctrl+Enter confirms.
  */
-export function PointOfSale({ hasOpenSession }: { hasOpenSession: boolean }) {
+export function PointOfSale({
+  rates,
+  cash,
+  categories,
+  featured,
+  canCreateCustomer,
+}: {
+  rates: Rates;
+  cash: PosCashStatus;
+  categories: ProductCategory[];
+  featured: SellableProduct[];
+  canCreateCustomer: boolean;
+}) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  // useTransition alone leaves a gap between the click and the pending flag.
+  // A ref closes it, so a double click can never send two sales.
+  const submittingRef = useRef(false);
 
-  const [lines, setLines] = useState<Line[]>([]);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const customerRef = useRef<HTMLInputElement>(null);
+
+  const [lines, setLines] = useState<CartLine[]>([]);
   const [currency, setCurrency] = useState<Currency>("PYG");
   const [method, setMethod] = useState<PaymentMethod>("CASH");
+  const [customer, setCustomer] = useState<PickedCustomer | null>(null);
+  const [discountMode, setDiscountMode] = useState<DiscountMode>("amount");
   const [discount, setDiscount] = useState("");
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
+  const [received, setReceived] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState("");
 
   const [query, setQuery] = useState("");
-  const [suggestions, setSuggestions] = useState<ProductSuggestion[]>([]);
+  const [category, setCategory] = useState<ProductCategory | null>(null);
+  const [results, setResults] = useState<SellableProduct[] | null>(null);
   const [isSearching, setIsSearching] = useState(false);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const requestRef = useRef(0);
 
-  const [customerQuery, setCustomerQuery] = useState("");
-  const [customerMatches, setCustomerMatches] = useState<CustomerSuggestion[]>([]);
-  const [customer, setCustomer] = useState<CustomerSuggestion | null>(null);
+  const isBrowsing = query.trim().length < MIN_QUERY && category === null;
 
   useEffect(() => {
-    if (query.trim().length < 2) return;
+    if (isBrowsing) return;
 
-    let cancelled = false;
+    const request = ++requestRef.current;
+    const trimmed = query.trim();
     const timer = setTimeout(async () => {
       setIsSearching(true);
-      const result = await searchProductsAction(query);
-      if (cancelled) return;
+      const result = await searchCatalogAction({
+        query: trimmed.length >= MIN_QUERY ? trimmed : undefined,
+        category: category ?? undefined,
+      });
+      if (request !== requestRef.current) return;
       setIsSearching(false);
-      setSuggestions(result.ok ? result.data : []);
+      setResults(result.ok ? result.data : []);
+      if (!result.ok) toast.error(result.error);
     }, 250);
 
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [query]);
-
-  useEffect(() => {
-    if (customer || customerQuery.trim().length < 3) return;
-
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      const result = await searchCustomersAction(customerQuery);
-      if (cancelled) return;
-      setCustomerMatches(result.ok ? result.data : []);
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [customerQuery, customer]);
+    return () => clearTimeout(timer);
+  }, [query, category, isBrowsing]);
 
   function handleQueryChange(value: string) {
     setQuery(value);
-    if (value.trim().length < 2) {
-      setSuggestions([]);
+    if (value.trim().length < MIN_QUERY && category === null) {
+      requestRef.current += 1;
+      setResults(null);
       setIsSearching(false);
     }
   }
 
-  function handleCustomerQueryChange(value: string) {
-    setCustomerQuery(value);
-    if (value.trim().length < 3) setCustomerMatches([]);
+  function handleCategoryChange(value: ProductCategory | null) {
+    setCategory(value);
+    setResults(null);
+    if (value === null && query.trim().length < MIN_QUERY) {
+      requestRef.current += 1;
+      setIsSearching(false);
+    }
   }
 
-  function addLine(product: ProductSuggestion) {
-    setLines((current) => {
-      const existing = current.findIndex((line) => line.productId === product.id);
-      if (existing >= 0) {
-        const next = [...current];
-        next[existing] = { ...next[existing], quantity: next[existing].quantity + 1 };
-        return next;
-      }
-      return [
-        ...current,
-        {
-          productId: product.id,
-          label: `${product.sku} · ${product.name}`,
-          quantity: 1,
-          // Left blank so the server uses the list price, converting if the
-          // product is priced in another currency.
-          unitPrice: "",
-          unitCost: product.averageCost,
-          available: product.quantity,
-          productCurrency: product.currency,
-        },
-      ];
-    });
+  const gridState: GridState = isBrowsing
+    ? featured.length > 0
+      ? { kind: "results", products: featured }
+      : { kind: "empty-catalog" }
+    : results === null
+      ? { kind: "loading" }
+      : results.length === 0
+        ? { kind: "empty-search" }
+        : { kind: "results", products: results };
 
-    setQuery("");
-    setSuggestions([]);
-    searchRef.current?.focus();
-  }
+  const gridTitle = isBrowsing
+    ? "Más vendidos"
+    : query.trim().length >= MIN_QUERY
+      ? "Resultados"
+      : "Productos de la categoría";
 
-  function updateLine(index: number, patch: Partial<Line>) {
-    setLines((current) => current.map((line, i) => (i === index ? { ...line, ...patch } : line)));
-  }
-
-  function removeLine(index: number) {
-    setLines((current) => current.filter((_, i) => i !== index));
-  }
-
-  // Only lines already priced in the sale's currency can be previewed here. A
-  // product in another currency is converted server-side with the frozen rate.
-  const previewable = lines.every(
-    (line) => line.unitPrice !== "" || line.productCurrency === currency,
+  const inCart = useMemo(
+    () => new Map(lines.map((line) => [line.productId, line.quantity])),
+    [lines],
   );
 
-  const totals = useMemo(() => {
-    if (!previewable) return null;
-    try {
-      return computeTotals(
-        lines.map((line) => ({
-          quantity: line.quantity,
-          unitPrice: line.unitPrice || "0",
-          unitCost: line.productCurrency === currency ? line.unitCost : "0",
-        })),
-        discount || "0",
-        currency,
-      );
-    } catch {
-      return null;
-    }
-  }, [lines, discount, currency, previewable]);
+  function add(product: SellableProduct) {
+    const current = inCart.get(product.id) ?? 0;
+    setLines((existing) => addToCart(existing, product, currency, rates));
+    setError(null);
+    setAnnouncement(`${product.name} agregado. ${current + 1} en el carrito.`);
 
-  function submit(event?: React.FormEvent) {
-    event?.preventDefault();
-    if (lines.length === 0) {
-      toast.error("Agregá al menos un producto");
+    if (current + 1 > product.quantity) {
+      toast.warning(
+        product.quantity <= 0
+          ? `${product.name} no tiene stock registrado`
+          : `Solo hay ${product.quantity} de ${product.name} en stock`,
+      );
+    }
+  }
+
+  /** Enter in the search box: add when the match is unambiguous. */
+  async function submitSearch() {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+
+    const request = ++requestRef.current;
+    setIsSearching(true);
+    const result = await searchCatalogAction({ query: trimmed });
+    if (request !== requestRef.current) return;
+    setIsSearching(false);
+
+    if (!result.ok) {
+      toast.error(result.error);
       return;
     }
 
-    startTransition(async () => {
-      const result = await createSaleAction({
-        customerId: customer?.id ?? "",
-        currency,
-        method,
-        discount,
-        notes,
-        lines: lines.map((line) => ({
-          productId: line.productId,
-          quantity: line.quantity,
-          unitPrice: line.unitPrice,
-        })),
-      });
+    const upper = trimmed.toUpperCase();
+    const match =
+      result.data.find((product) => product.sku.toUpperCase() === upper) ??
+      (result.data.length === 1 ? result.data[0] : null);
 
-      if (!result.ok) {
-        toast.error(result.error);
-        return;
-      }
+    if (match) {
+      add(match);
+      handleQueryChange("");
+      searchRef.current?.focus();
+      return;
+    }
 
-      toast.success(`Venta ${result.data.number} registrada`);
-      router.push(`/ventas/${result.data.saleId}`);
-    });
+    setCategory(null);
+    setResults(result.data);
+    toast.info(
+      result.data.length > 1
+        ? "Hay varios productos. Elegí uno de la lista."
+        : `No encontramos "${trimmed}"`,
+    );
   }
 
-  function handleKeyDown(event: React.KeyboardEvent<HTMLFormElement>) {
-    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-      event.preventDefault();
-      submit();
+  function updateLine(productId: string, patch: Partial<CartLine>) {
+    setLines((existing) =>
+      existing.map((line) => (line.productId === productId ? { ...line, ...patch } : line)),
+    );
+    setError(null);
+  }
+
+  function removeLine(productId: string) {
+    const removed = lines.find((line) => line.productId === productId);
+    setLines((existing) => existing.filter((line) => line.productId !== productId));
+    if (removed) setAnnouncement(`${removed.name} quitado del carrito.`);
+  }
+
+  function changeCurrency(next: Currency) {
+    if (next === currency) return;
+    setLines((existing) => repriceLines(existing, currency, next, rates));
+    // An amount typed in the old currency means nothing in the new one.
+    if (discountMode === "amount") setDiscount("");
+    setReceived("");
+    setCurrency(next);
+  }
+
+  function handleInvoiceBlur() {
+    const trimmed = invoiceNumber.trim();
+    if (!trimmed) {
+      setInvoiceError(null);
+      return;
+    }
+    const normalized = normalizeInvoiceNumber(trimmed);
+    if (normalized) {
+      setInvoiceNumber(normalized);
+      setInvoiceError(null);
+    } else {
+      setInvoiceError("Formato: 001-002-0000004");
     }
   }
 
+  // The subtotal before discount, which a percentage is taken from.
+  const basePreview = previewCart(lines, "0", currency, rates);
+
+  const resolvedDiscount = basePreview
+    ? resolveDiscount(discountMode, discount, basePreview.totals.subtotal, currency)
+    : null;
+
+  const preview = resolvedDiscount?.ok
+    ? previewCart(lines, resolvedDiscount.amount, currency, rates)
+    : basePreview;
+
+  function submit(event?: React.FormEvent) {
+    event?.preventDefault();
+    if (submittingRef.current || isPending) return;
+
+    if (lines.length === 0) {
+      setError("Agregá al menos un producto");
+      searchRef.current?.focus();
+      return;
+    }
+    if (!basePreview || !resolvedDiscount) {
+      setError("Hay productos sin precio o con un precio inválido");
+      return;
+    }
+    if (!resolvedDiscount.ok) {
+      setError(resolvedDiscount.error);
+      document.getElementById("pos-discount")?.focus();
+      return;
+    }
+    if (preview && Money.of(preview.totals.total, currency).isNegative()) {
+      setError("El descuento no puede superar el total de la venta");
+      document.getElementById("pos-discount")?.focus();
+      return;
+    }
+    if (invoiceNumber.trim() && !normalizeInvoiceNumber(invoiceNumber)) {
+      setInvoiceError("Formato: 001-002-0000004");
+      document.getElementById("pos-invoice")?.focus();
+      return;
+    }
+
+    setError(null);
+    submittingRef.current = true;
+
+    startTransition(async () => {
+      try {
+        const result = await createSaleAction(
+          toSalePayload({
+            lines,
+            customerId: customer?.id ?? null,
+            currency,
+            method,
+            discount: resolvedDiscount.amount,
+            notes,
+            invoiceNumber,
+          }),
+        );
+
+        if (!result.ok) {
+          const firstField = result.fieldErrors ? Object.values(result.fieldErrors)[0]?.[0] : null;
+          setError(firstField ?? result.error);
+          toast.error(firstField ?? result.error);
+          submittingRef.current = false;
+          return;
+        }
+
+        toast.success(`Venta ${result.data.number} registrada`, {
+          description: result.data.belowCost ? "Quedó registrada por debajo del costo." : undefined,
+        });
+        // The flag stays set: this screen is on its way out and must not send
+        // the same cart again.
+        router.push(`/ventas/${result.data.saleId}`);
+      } catch {
+        submittingRef.current = false;
+        setError("No se pudo registrar la venta. Revisá la conexión y probá de nuevo.");
+      }
+    });
+  }
+
+  const onShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    } else if (event.key === "F2") {
+      event.preventDefault();
+      customerRef.current?.focus();
+    } else if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      submit();
+    }
+  });
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => onShortcut(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
+
   return (
-    <form onSubmit={submit} onKeyDown={handleKeyDown} className="grid gap-4 lg:grid-cols-3">
-      <div className="space-y-4 lg:col-span-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Productos</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="relative">
-              <Input
-                ref={searchRef}
-                value={query}
-                autoFocus
-                autoComplete="off"
-                placeholder="Buscar por código o nombre"
-                onChange={(event) => handleQueryChange(event.target.value)}
-              />
-              {isSearching ? (
-                <Loader2 className="text-muted-foreground absolute top-1/2 right-3 size-4 -translate-y-1/2 animate-spin" />
-              ) : null}
-            </div>
+    <form
+      onSubmit={submit}
+      className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_380px] xl:gap-6"
+    >
+      <h1 className="sr-only">Nueva venta</h1>
+      <p aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
 
-            {suggestions.length > 0 ? (
-              <ul className="max-h-56 overflow-auto rounded-md border">
-                {suggestions.map((suggestion) => (
-                  <li key={suggestion.id}>
-                    <button
-                      type="button"
-                      className="hover:bg-accent/60 flex w-full items-center gap-3 px-3 py-2 text-left text-sm"
-                      onClick={() => addLine(suggestion)}
-                    >
-                      <Plus className="size-4 shrink-0" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">
-                          {suggestion.sku} · {suggestion.name}
-                        </span>
-                        <span
-                          className={cn(
-                            "text-xs",
-                            suggestion.quantity <= 0 ? "text-red-700" : "text-muted-foreground",
-                          )}
-                        >
-                          {suggestion.quantity} en stock
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-
-            {lines.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                Buscá un producto para empezar la venta.
-              </p>
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-muted-foreground text-left text-xs">
-                    <th className="pb-1">Producto</th>
-                    <th className="w-20 pb-1">Cant.</th>
-                    <th className="w-32 pb-1">Precio</th>
-                    <th className="w-10 pb-1" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((line, index) => (
-                    <tr key={line.productId} className="border-t">
-                      <td className="py-2">
-                        <div className="truncate">{line.label}</div>
-                        {line.quantity > line.available ? (
-                          <div className="text-xs text-amber-700">
-                            Solo hay {line.available} en stock
-                          </div>
-                        ) : null}
-                        {line.productCurrency !== currency ? (
-                          <div className="text-muted-foreground text-xs">
-                            Se convierte desde {line.productCurrency}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="py-2">
-                        <Input
-                          value={String(line.quantity)}
-                          inputMode="numeric"
-                          className="h-8"
-                          onChange={(event) =>
-                            updateLine(index, {
-                              quantity: Math.max(1, Number(event.target.value.replace(/\D/g, "")) || 1),
-                            })
-                          }
-                        />
-                      </td>
-                      <td className="py-2">
-                        <Input
-                          value={line.unitPrice}
-                          inputMode="decimal"
-                          className="h-8"
-                          placeholder="lista"
-                          onChange={(event) => updateLine(index, { unitPrice: event.target.value })}
-                        />
-                      </td>
-                      <td className="py-2">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Quitar"
-                          onClick={() => removeLine(index)}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Cliente (opcional)</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {customer ? (
-              <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm">
-                <span>{customer.fullName}</span>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setCustomer(null)}>
-                  Quitar
-                </Button>
-              </div>
-            ) : (
-              <>
-                <Input
-                  value={customerQuery}
-                  autoComplete="off"
-                  placeholder="Teléfono o nombre"
-                  onChange={(event) => handleCustomerQueryChange(event.target.value)}
-                />
-                {customerMatches.length > 0 ? (
-                  <ul className="max-h-40 overflow-auto rounded-md border">
-                    {customerMatches.map((match) => (
-                      <li key={match.id}>
-                        <button
-                          type="button"
-                          className="hover:bg-accent/60 w-full px-3 py-2 text-left text-sm"
-                          onClick={() => {
-                            setCustomer(match);
-                            setCustomerMatches([]);
-                          }}
-                        >
-                          {match.fullName}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </>
-            )}
-          </CardContent>
-        </Card>
+      <div className="bg-card min-w-0 space-y-4 rounded-xl border p-4 shadow-xs lg:p-5">
+        <ProductSearch
+          ref={searchRef}
+          value={query}
+          isSearching={isSearching}
+          onChange={handleQueryChange}
+          onSubmit={submitSearch}
+        />
+        <CategoryChips categories={categories} value={category} onChange={handleCategoryChange} />
+        <ProductGrid title={gridTitle} state={gridState} inCart={inCart} onAdd={add} />
       </div>
 
-      <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Cobro</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {!hasOpenSession ? (
-              <Alert className="border-amber-400 bg-amber-50">
-                <TriangleAlert className="size-4" />
-                <AlertDescription>
-                  No hay caja abierta. La venta se registra igual, pero no va a entrar al arqueo.
-                </AlertDescription>
-              </Alert>
-            ) : null}
+      <aside
+        aria-label="Venta actual"
+        className="bg-card flex flex-col rounded-xl border shadow-xs lg:sticky lg:top-[4.5rem] lg:max-h-[calc(100dvh-5.5rem)]"
+      >
+        <div className="space-y-5 p-4 lg:overflow-y-auto">
+          <Cart
+            lines={lines}
+            currency={currency}
+            rates={rates}
+            onQuantity={(productId, quantity) => updateLine(productId, { quantity })}
+            onPrice={(productId, unitPrice) => updateLine(productId, { unitPrice })}
+            onRemove={removeLine}
+          />
+          <CustomerPicker
+            ref={customerRef}
+            value={customer}
+            onChange={setCustomer}
+            canCreate={canCreateCustomer}
+          />
+          <CashStatusBlock status={cash} />
+          <PaymentMethods value={method} onChange={setMethod} />
+          {method === "CASH" ? (
+            <CashReceived
+              value={received}
+              onChange={setReceived}
+              total={preview?.totals.total ?? null}
+              currency={currency}
+            />
+          ) : null}
+          <SaleOptions
+            currency={currency}
+            onCurrency={changeCurrency}
+            discountMode={discountMode}
+            onDiscountMode={(mode) => {
+              setDiscountMode(mode);
+              setDiscount("");
+            }}
+            discount={discount}
+            onDiscount={(value) => {
+              setDiscount(value);
+              setError(null);
+            }}
+            discountError={resolvedDiscount && !resolvedDiscount.ok ? resolvedDiscount.error : null}
+            discountAmount={resolvedDiscount?.ok ? resolvedDiscount.amount : null}
+            invoiceNumber={invoiceNumber}
+            onInvoiceNumber={(value) => {
+              setInvoiceNumber(value);
+              setInvoiceError(null);
+            }}
+            onInvoiceBlur={handleInvoiceBlur}
+            invoiceError={invoiceError}
+            notes={notes}
+            onNotes={setNotes}
+          />
+        </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="saleCurrency">Moneda</Label>
-              <Select
-                value={currency}
-                onValueChange={(value) => {
-                  if (value) setCurrency(value as Currency);
-                }}
-              >
-                <SelectTrigger id="saleCurrency">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {CURRENCIES.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {CURRENCY_LABEL[option]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="saleMethod">Forma de pago</Label>
-              <Select
-                value={method}
-                onValueChange={(value) => {
-                  if (value) setMethod(value as PaymentMethod);
-                }}
-              >
-                <SelectTrigger id="saleMethod">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PAYMENT_METHODS.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {PAYMENT_METHOD_LABEL[option]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="saleDiscount">Descuento</Label>
-              <Input
-                id="saleDiscount"
-                value={discount}
-                inputMode="decimal"
-                placeholder="0"
-                onChange={(event) => setDiscount(event.target.value)}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="saleNotes">Nota</Label>
-              <Input
-                id="saleNotes"
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                placeholder="Liquidación, cliente frecuente"
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Total</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            {totals ? (
-              <>
-                <Row label="Subtotal">{formatMoney(totals.subtotal, currency)}</Row>
-                <Row label="Descuento">{formatMoney(totals.discount, currency)}</Row>
-                <div className="flex items-center justify-between border-t pt-2">
-                  <span className="font-medium">Total</span>
-                  <span className="text-xl font-semibold tabular-nums">
-                    {formatMoney(totals.total, currency)}
-                  </span>
-                </div>
-                <Row label="Ganancia estimada">
-                  <span className={totals.belowCost ? "text-red-700" : "text-emerald-700"}>
-                    {formatMoney(totals.margin, currency)}
-                  </span>
-                </Row>
-                {totals.belowCost ? (
-                  <p className="text-xs text-red-700">
-                    Estás vendiendo por debajo del costo. Se puede, queda registrado.
-                  </p>
-                ) : null}
-              </>
-            ) : (
-              <p className="text-muted-foreground">
-                El total se calcula al confirmar, porque hay productos en otra moneda.
-              </p>
-            )}
-
-            <Button type="submit" size="lg" className="w-full" disabled={isPending}>
-              {isPending ? "Registrando..." : "Cerrar venta"}
-            </Button>
-            <p className="text-muted-foreground text-center text-xs">Ctrl + Enter</p>
-          </CardContent>
-        </Card>
-      </div>
+        <div className="bg-card rounded-b-xl border-t p-4">
+          <SaleTotalsPanel
+            preview={preview}
+            currency={currency}
+            hasLines={lines.length > 0}
+            isPending={isPending}
+            error={error}
+          />
+        </div>
+      </aside>
     </form>
-  );
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="tabular-nums">{children}</span>
-    </div>
   );
 }

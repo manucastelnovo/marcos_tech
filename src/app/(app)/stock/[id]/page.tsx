@@ -15,6 +15,8 @@ import {
   StockHealthBadge,
 } from "@/modules/inventory/ui/stock-badges";
 import { ProductForm } from "@/modules/inventory/ui/product-form";
+import { ProductImageUploader } from "@/modules/inventory/ui/product-image-uploader";
+import { ProductThumbnail } from "@/modules/inventory/ui/product-thumbnail";
 import {
   AdjustStockForm,
   ReceiveStockForm,
@@ -163,6 +165,32 @@ export default async function ProductDetailPage({
         </div>
 
         <div className="space-y-4">
+          {canManage || product.imageUrl ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Imagen</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {canManage ? (
+                  <ProductImageUploader
+                    productId={product.id}
+                    name={product.name}
+                    category={product.category}
+                    imageUrl={product.imageUrl}
+                  />
+                ) : (
+                  <ProductThumbnail
+                    imageUrl={product.imageUrl}
+                    name={product.name}
+                    category={product.category}
+                    sizes="320px"
+                    className="aspect-square w-full rounded-lg border"
+                  />
+                )}
+              </CardContent>
+            </Card>
+          ) : null}
+
           <Card>
             <CardHeader>
               <CardTitle>Resumen</CardTitle>

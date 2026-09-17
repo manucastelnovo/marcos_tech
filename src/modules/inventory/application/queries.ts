@@ -113,6 +113,7 @@ export type StockMovementEntry = {
 };
 
 export type ProductDetail = ProductListItem & {
+  imageUrl: string | null;
   movements: StockMovementEntry[];
   serials: Array<{ id: string; serial: string; status: string; repairOrderNumber: string | null }>;
   /** Sum of the ledger, for comparison against the cached quantity. */
@@ -135,6 +136,7 @@ export async function getProductDetail(id: string): Promise<ProductDetail | null
       currency: true,
       location: true,
       tracksSerial: true,
+      imageUrl: true,
       movements: {
         orderBy: { createdAt: "desc" },
         take: 100,
@@ -184,6 +186,7 @@ export async function getProductDetail(id: string): Promise<ProductDetail | null
     currency: row.currency,
     location: row.location,
     tracksSerial: row.tracksSerial,
+    imageUrl: row.imageUrl,
     health: stockHealth(row.quantity, row.minStock),
     ledgerQuantity: ledger._sum.quantity ?? 0,
     movements: row.movements.map((movement) => ({
